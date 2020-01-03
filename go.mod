@@ -1,4 +1,4 @@
-module websocket-go
+module github.com/mileskies/websocket-go
 
 go 1.13
 
