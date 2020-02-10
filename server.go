@@ -46,7 +46,7 @@ func (server *Server) NewClient(conn *websocket.Conn) *Client {
 }
 
 // Broadcast Message to Each Client From Server
-func (server *Server) Broadcast(event string, message string) {
+func (server *Server) Broadcast(event string, message string, room ...string) {
 	msg := make(map[string]string)
 	msg["event"] = event
 	msg["payload"] = message
@@ -55,7 +55,12 @@ func (server *Server) Broadcast(event string, message string) {
 		log.Error().Err(err)
 	}
 
-	if err := server.redisClient.Publish("ServerBroadcast", str).Err(); err != nil {
+	r := "ServerBroadcast"
+	if len(room) > 0 {
+		r = room[0]
+	}
+
+	if err := server.redisClient.Publish(r, str).Err(); err != nil {
 		log.Error().Err(err)
 	}
 }
