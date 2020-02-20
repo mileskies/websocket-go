@@ -25,7 +25,7 @@ import "github.com/mileskies/websocket-go"
 
 Requires a running `Redis` service for handling message exchange from replicas of your application runs on different machines or container.
 
-```
+```go
 package main
 
 import (
@@ -51,17 +51,18 @@ func main() {
 
     wsServer.On("onConnect", func(c ws.Client) error {
 		fmt.Println("connected")
+
+        c.On("msg", func(msg string) {
+            fmt.Println("msg:", msg)
+            c.Emit("msg", msg)
+        })
+        c.On("onError", func(e error) {
+            fmt.Println("error:", e)
+        })
+        c.On("onDisconnect", func(msg string) {
+            fmt.Println("disconnect:", msg)
+        })
 		return nil
-	})
-	wsServer.On("msg", func(c ws.Client, msg string) {
-		fmt.Println("msg:", msg)
-		c.Emit("msg", msg)
-	})
-	wsServer.On("onError", func(c ws.Client, e error) {
-		fmt.Println("error:", e)
-	})
-	wsServer.On("onDisconnect", func(c ws.Client, msg string) {
-		fmt.Println("disconnect:", msg)
 	})
 
     http.HandleFunc("/socket.io/*any", func(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +73,7 @@ func main() {
 ```
 
 Also redis sentinel
-```
+```go
     redisClient := redis.NewFailoverClient(&redis.FailoverOptions{
         MasterName:    "master",
         SentinelAddrs: []string{":26379"},
@@ -87,29 +88,45 @@ Also redis sentinel
 ### Server
 
 - Broadcast message to each client
-```
+```go
     // Broadcast(event, message)
     server.Broadcast("hello", "hello world")
 ```
 
 - Broadcast message to specific room
-```
+```go
     // Broadcast(event, message, room)
     server.Broadcast("chat", "Hi!", "coffee meets")
 ```
 
 - Event Listen
-```
+```go
     // On(event, func)
-    server.On("hello", func(c ws.Client, msg string) {
+    server.On("onConnect", func(c ws.Client) error {
         // do something
     })
 ```
 
 ### Client
 
-- Join & Leave room
+- Event Listen
+```go
+    // On(event, func)
+    client.On("hello", func(msg string) {
+        // do something
+    })
+
+    client.On("onDisconnect", func(msg string) {
+        // do something
+    })
+
+    client.On("onError", func(e error) {
+        // do something
+    })
 ```
+
+- Join & Leave room
+```go
     // Join(room) & Leave(room)
     client.Join("yeeeee")
 
@@ -117,13 +134,13 @@ Also redis sentinel
 ```
 
 - Emit message to specific room
-```
+```go
     // To(room, event, message)
     client.To("yeeeee", "hello", "hello world")
 ```
 
 - Emit message
-```
+```go
     // Emit(event, message)
     client.Emit("hello", "hello world")
 ```

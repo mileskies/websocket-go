@@ -23,18 +23,19 @@ const (
 	maxMessageSize = 512
 )
 
-// Client Structure
-type Client struct {
-	server *Server
-	uid    string
-	conn   *websocket.Conn
-	pubsub *redis.PubSub
+type clientHandler struct {
+	onDisconnect func(msg string)
+	onError      func(err error)
 }
 
-// Message Struct
-type Message struct {
-	Event   string `json:"event"`
-	Payload string `json:"payload"`
+// Client Structure
+type Client struct {
+	server  *Server
+	uid     string
+	conn    *websocket.Conn
+	pubsub  *redis.PubSub
+	events  map[string]reflect.Value
+	handler *clientHandler
 }
 
 // Emit Message
@@ -42,7 +43,7 @@ func (c *Client) Emit(event string, message string, room ...string) {
 	msg := []string{event, message}
 	str, err := json.Marshal(msg)
 	if err != nil {
-		c.server.handler.onError(*c, err)
+		c.handler.onError(err)
 		log.Error().Err(err)
 	}
 	str = append([]byte{52, 50}, str...)
@@ -52,7 +53,7 @@ func (c *Client) Emit(event string, message string, room ...string) {
 		r = room[0]
 	}
 	if err := c.server.redisClient.Publish(r, str).Err(); err != nil {
-		c.server.handler.onError(*c, err)
+		c.handler.onError(err)
 		log.Error().Err(err)
 	}
 }
@@ -72,10 +73,34 @@ func (c *Client) To(room string, event string, message string) {
 	c.Emit(event, message, room)
 }
 
-func (c *Client) eventHandle(handler reflect.Value, args ...reflect.Value) {
-	if len(args) > 0 {
-		args = append([]reflect.Value{reflect.ValueOf(*c)}, args...)
+// On Event Listener
+func (c *Client) On(event string, handler interface{}) {
+	fValue := reflect.ValueOf(handler)
+	if fValue.Kind() != reflect.Func {
+		panic("event handler must be a func.")
 	}
+
+	defaultEvent := [3]string{"onDisconnect", "onError"}
+	for _, e := range defaultEvent {
+		if e == event {
+			c.events[event].Call([]reflect.Value{fValue})
+			return
+		}
+	}
+	c.events[event] = fValue
+}
+
+// OnDisconnect as disconnect handler
+func (c *Client) onDisconnect(f func(string)) {
+	c.handler.onDisconnect = f
+}
+
+// OnError as error handler
+func (c *Client) onError(f func(error)) {
+	c.handler.onError = f
+}
+
+func (c *Client) eventHandle(handler reflect.Value, args ...reflect.Value) {
 	handler.Call(args)
 }
 
@@ -91,7 +116,7 @@ func (c *Client) readPump() {
 	for {
 		_, m, err := c.conn.ReadMessage()
 		if err != nil {
-			c.server.handler.onError(*c, err)
+			c.handler.onError(err)
 			log.Error().Err(err)
 			break
 		}
@@ -117,7 +142,7 @@ func (c *Client) readPump() {
 				payload = tmp
 			}
 
-			if handler, ok := c.server.events[event]; ok {
+			if handler, ok := c.events[event]; ok {
 				go c.eventHandle(handler, reflect.ValueOf(string(payload)))
 			}
 		}
@@ -146,7 +171,7 @@ func (c *Client) writePump() {
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				c.server.handler.onError(*c, err)
+				c.handler.onError(err)
 				log.Error().Err(err)
 				return
 			}

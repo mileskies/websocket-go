@@ -21,10 +21,8 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-type defaultHandler struct {
-	onConnect    func(c Client) error
-	onDisconnect func(c Client, msg string)
-	onError      func(c Client, err error)
+type serverHandler struct {
+	onConnect func(c Client) error
 }
 
 // Server Struct
@@ -34,7 +32,7 @@ type Server struct {
 	disconnect  chan *Client
 	redisClient *redis.Client
 	events      map[string]reflect.Value
-	handler     *defaultHandler
+	handler     *serverHandler
 	sync.Mutex
 }
 
@@ -46,11 +44,10 @@ func NewServer(redisClient *redis.Client) *Server {
 		disconnect:  make(chan *Client),
 		redisClient: redisClient,
 		events:      make(map[string]reflect.Value),
-		handler:     &defaultHandler{},
+		handler:     &serverHandler{},
 	}
 	server.events["onConnect"] = reflect.ValueOf(server.onConnect)
-	server.events["onDisconnect"] = reflect.ValueOf(server.onDisconnect)
-	server.events["onError"] = reflect.ValueOf(server.onError)
+
 	go server.run()
 	return &server
 }
@@ -59,7 +56,16 @@ func NewServer(redisClient *redis.Client) *Server {
 func (s *Server) NewClient(conn *websocket.Conn) *Client {
 	uid := uuid.New().String()
 	pubsub := s.redisClient.Subscribe(uid, "ServerBroadcast")
-	client := &Client{server: s, uid: uid, conn: conn, pubsub: pubsub}
+	client := &Client{
+		server:  s,
+		uid:     uid,
+		conn:    conn,
+		pubsub:  pubsub,
+		events:  make(map[string]reflect.Value),
+		handler: &clientHandler{},
+	}
+	client.events["onDisconnect"] = reflect.ValueOf(client.onDisconnect)
+	client.events["onError"] = reflect.ValueOf(client.onError)
 	s.Lock()
 	defer s.Unlock()
 	s.clients[uid] = client
@@ -113,33 +119,21 @@ func (s *Server) On(event string, handler interface{}) {
 	}
 	fType := fValue.Type()
 	if fType.NumIn() < 1 || fType.In(0).Name() != "Client" {
-		panic("handler function should be like func(c Client, msg string)")
+		panic("handler function should be like func(c Client)")
 	}
 
-	defaultEvent := [3]string{"onConnect", "onDisconnect", "onError"}
+	defaultEvent := [3]string{"onConnect"}
 	for _, e := range defaultEvent {
 		if e == event {
 			s.events[event].Call([]reflect.Value{fValue})
 			return
 		}
 	}
-
-	s.events[event] = fValue
 }
 
 // OnConnect as connection open handler
 func (s *Server) onConnect(f func(Client) error) {
 	s.handler.onConnect = f
-}
-
-// OnDisconnect as disconnect handler
-func (s *Server) onDisconnect(f func(Client, string)) {
-	s.handler.onDisconnect = f
-}
-
-// OnError as error handler
-func (s *Server) onError(f func(Client, error)) {
-	s.handler.onError = f
 }
 
 // Run WebSocket Server
@@ -150,7 +144,7 @@ func (s *Server) run() {
 			s.NewClient(c)
 		case client := <-s.disconnect:
 			if _, ok := s.clients[client.uid]; ok {
-				s.handler.onDisconnect(*client, "disconnect")
+				client.handler.onDisconnect("disconnect")
 				delete(s.clients, client.uid)
 			}
 		}

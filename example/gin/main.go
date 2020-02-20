@@ -51,17 +51,19 @@ func main() {
 
 	wsServer.On("onConnect", func(c ws.Client) error {
 		fmt.Println("connected")
+
+		c.On("msg", func(msg string) {
+			fmt.Println("msg:", msg)
+			c.Emit("msg", msg)
+		})
+		c.On("onError", func(e error) {
+			fmt.Println("error:", e)
+		})
+		c.On("onDisconnect", func(msg string) {
+			fmt.Println("disconnect:", msg)
+		})
+
 		return nil
-	})
-	wsServer.On("msg", func(c ws.Client, msg string) {
-		fmt.Println("msg:", msg)
-		c.Emit("msg", msg)
-	})
-	wsServer.On("onError", func(c ws.Client, e error) {
-		fmt.Println("error:", e)
-	})
-	wsServer.On("onDisconnect", func(c ws.Client, msg string) {
-		fmt.Println("disconnect:", msg)
 	})
 
 	router.Use(GinMiddleware("*"))
