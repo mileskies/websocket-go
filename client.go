@@ -3,6 +3,8 @@ package ws
 import (
 	"encoding/json"
 	"reflect"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/go-redis/redis/v7"
@@ -27,7 +29,6 @@ type Client struct {
 	uid    string
 	conn   *websocket.Conn
 	pubsub *redis.PubSub
-	events map[string]reflect.Value
 }
 
 // Message Struct
@@ -36,35 +37,22 @@ type Message struct {
 	Payload string `json:"payload"`
 }
 
-// On Event Listener
-func (c *Client) On(event string, handler interface{}) {
-	fValue := reflect.ValueOf(handler)
-	if fValue.Kind() != reflect.Func {
-		panic("event handler must be a func.")
-	}
-	fType := fValue.Type()
-	if fType.NumIn() < 1 || fType.In(0).Name() != "Client" {
-		panic("handler function should be like func(c Client, msg string)")
-	}
-
-	c.events[event] = fValue
-}
-
 // Emit Message
 func (c *Client) Emit(event string, message string, room ...string) {
-	msg := make(map[string]string)
-	msg["event"] = event
-	msg["payload"] = message
+	msg := []string{event, message}
 	str, err := json.Marshal(msg)
 	if err != nil {
+		c.server.handler.onError(*c, err)
 		log.Error().Err(err)
 	}
+	str = append([]byte{52, 50}, str...)
 
 	r := c.uid
 	if len(room) > 0 {
 		r = room[0]
 	}
 	if err := c.server.redisClient.Publish(r, str).Err(); err != nil {
+		c.server.handler.onError(*c, err)
 		log.Error().Err(err)
 	}
 }
@@ -84,11 +72,10 @@ func (c *Client) To(room string, event string, message string) {
 	c.Emit(event, message, room)
 }
 
-func (c *Client) eventHandle(handler reflect.Value, msg string) {
-	args := append([]reflect.Value{
-		reflect.ValueOf(*c),
-		reflect.ValueOf(msg),
-	})
+func (c *Client) eventHandle(handler reflect.Value, args ...reflect.Value) {
+	if len(args) > 0 {
+		args = append([]reflect.Value{reflect.ValueOf(*c)}, args...)
+	}
 	handler.Call(args)
 }
 
@@ -96,22 +83,45 @@ func (c *Client) readPump() {
 	defer func() {
 		c.conn.Close()
 		c.pubsub.Close()
-		c.server.disconnect <- c.uid
+		c.server.disconnect <- c
 	}()
 	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 	for {
-		var msg Message
-		err := c.conn.ReadJSON(&msg)
+		_, m, err := c.conn.ReadMessage()
 		if err != nil {
+			c.server.handler.onError(*c, err)
 			log.Error().Err(err)
 			break
 		}
 
-		if handler, ok := c.events[msg.Event]; ok {
-			go c.eventHandle(handler, msg.Payload)
+		re := regexp.MustCompile(`\d+\[\"(.*)\"\,(.*)\]`)
+		if num, err := strconv.Atoi(string(m)); err == nil {
+			// handle status dispatch
+			if num == 2 {
+				c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+				c.conn.WriteMessage(1, []byte("3"))
+			}
+		} else if matchs := re.FindSubmatch(m); len(matchs) > 0 {
+			event := string(matchs[1])
+			payload := matchs[2]
+			if payload[0] == 34 && payload[len(payload)-1] == 34 {
+				var tmp []byte
+				for i, b := range payload {
+					if i == 0 || i == len(payload)-1 {
+						continue
+					}
+					tmp = append(tmp, b)
+				}
+				payload = tmp
+			}
+
+			if handler, ok := c.server.events[event]; ok {
+				go c.eventHandle(handler, reflect.ValueOf(string(payload)))
+			}
 		}
+
 	}
 }
 
@@ -121,7 +131,7 @@ func (c *Client) writePump() {
 		ticker.Stop()
 		c.conn.Close()
 		c.pubsub.Close()
-		c.server.disconnect <- c.uid
+		c.server.disconnect <- c
 	}()
 
 	for {
@@ -132,10 +142,12 @@ func (c *Client) writePump() {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			c.conn.WriteJSON(msg.Payload)
+			c.conn.WriteMessage(1, []byte(msg.Payload))
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				c.server.handler.onError(*c, err)
+				log.Error().Err(err)
 				return
 			}
 		}

@@ -7,6 +7,7 @@
 
 WebSocket-Go is an implementation for Golang, which is a `realtime`, `fast` and `scalable` websocket(Socket.IO-like) library based on [Gorilla WebSocket](https://github.com/gorilla/websocket), [go-redis](https://github.com/go-redis/redis) and [uuid](https://github.com/google/uuid).
 
+Compatible with [Socket.IO](https://socket.io/) js client
 
 ## Installation
 Install:
@@ -33,7 +34,7 @@ import (
 
     "github.com/go-redis/redis/v7"
     "github.com/gorilla/websocket"
-    "github.com/mileskies/websocket-go"
+    ws "github.com/mileskies/websocket-go"
 )
 
 func main() {
@@ -48,25 +49,25 @@ func main() {
 
     wsServer = ws.NewServer(redisClient)
 
-    http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-        WSHandler(wsServer, w, r)
+    wsServer.On("onConnect", func(c ws.Client) error {
+		fmt.Println("connected")
+		return nil
+	})
+	wsServer.On("msg", func(c ws.Client, msg string) {
+		fmt.Println("msg:", msg)
+		c.Emit("msg", msg)
+	})
+	wsServer.On("onError", func(c ws.Client, e error) {
+		fmt.Println("error:", e)
+	})
+	wsServer.On("onDisconnect", func(c ws.Client, msg string) {
+		fmt.Println("disconnect:", msg)
+	})
+
+    http.HandleFunc("/socket.io/*any", func(w http.ResponseWriter, r *http.Request) {
+        wsServer.ServeHTTP(w, r)
     })
     log.Fatal(http.ListenAndServe(":80", nil))
-}
-
-var upgrader = websocket.Upgrader{
-    CheckOrigin: func(r *http.Request) bool {
-        return true
-    },
-}
-
-func WSHandler(server *ws.Server, w http.ResponseWriter, r *http.Request) {
-    conn, err := upgrader.Upgrade(w, r, nil)
-    if err != nil {
-        return
-    }
-
-    client := server.NewClient(conn)
 }
 ```
 
@@ -91,15 +92,21 @@ Also redis sentinel
     server.Broadcast("hello", "hello world")
 ```
 
-### Client
+- Broadcast message to specific room
+```
+    // Broadcast(event, message, room)
+    server.Broadcast("chat", "Hi!", "coffee meets")
+```
 
 - Event Listen
 ```
     // On(event, func)
-    client.On("hello", func(c ws.Client, msg string) {
+    server.On("hello", func(c ws.Client, msg string) {
         // do something
     })
 ```
+
+### Client
 
 - Join & Leave room
 ```
@@ -120,9 +127,6 @@ Also redis sentinel
     // Emit(event, message)
     client.Emit("hello", "hello world")
 ```
-
-## Features
-- Fully compatible with [Socket.IO](https://socket.io/) js client
 
 ## Todo
 - Testing
