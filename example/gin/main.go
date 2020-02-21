@@ -51,6 +51,7 @@ func main() {
 
 	wsServer.On("onConnect", func(c ws.Client) error {
 		fmt.Println("connected")
+		fmt.Printf("context: %+v \n", c.Context)
 
 		c.On("msg", func(msg string) {
 			fmt.Println("msg:", msg)
@@ -67,7 +68,14 @@ func main() {
 	})
 
 	router.Use(GinMiddleware("*"))
-	router.GET("/socket.io/*any", gin.WrapH(wsServer))
+	router.GET("/socket.io/*any", wsHandler)
 
 	router.Run(":80")
+}
+
+func wsHandler(c *gin.Context) {
+	context := make(map[string]interface{})
+	context["hello"] = "world"
+
+	wsServer.ServeHTTP(c.Writer, c.Request, context)
 }

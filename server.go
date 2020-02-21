@@ -27,7 +27,6 @@ type serverHandler struct {
 
 // Server Struct
 type Server struct {
-	connChan    chan *websocket.Conn
 	clients     map[string]*Client
 	disconnect  chan *Client
 	redisClient *redis.Client
@@ -39,7 +38,6 @@ type Server struct {
 // NewServer call to Init WebSocket Server
 func NewServer(redisClient *redis.Client) *Server {
 	server := Server{
-		connChan:    make(chan *websocket.Conn),
 		clients:     make(map[string]*Client),
 		disconnect:  make(chan *Client),
 		redisClient: redisClient,
@@ -53,33 +51,34 @@ func NewServer(redisClient *redis.Client) *Server {
 }
 
 // NewClient When New Client Connected
-func (s *Server) NewClient(conn *websocket.Conn) *Client {
-	uid := uuid.New().String()
-	pubsub := s.redisClient.Subscribe(uid, "ServerBroadcast")
+func (s *Server) NewClient(conn *websocket.Conn, context map[string]interface{}) *Client {
+	sid := uuid.New().String()
+	pubsub := s.redisClient.Subscribe(sid, "ServerBroadcast")
 	client := &Client{
 		server:  s,
-		uid:     uid,
+		sid:     sid,
 		conn:    conn,
 		pubsub:  pubsub,
 		events:  make(map[string]reflect.Value),
 		handler: &clientHandler{},
+		Context: context,
 	}
 	client.events["onDisconnect"] = reflect.ValueOf(client.onDisconnect)
 	client.events["onError"] = reflect.ValueOf(client.onError)
 	s.Lock()
 	defer s.Unlock()
-	s.clients[uid] = client
+	s.clients[sid] = client
 	go client.writePump()
 	go client.readPump()
 
-	conn.WriteMessage(1, []byte("0{\"sid\":\""+uid+"\",\"upgrades\":[],\"pingInterval\":30000,\"pingTimeout\":60000}"))
+	conn.WriteMessage(1, []byte("0{\"sid\":\""+sid+"\",\"upgrades\":[],\"pingInterval\":30000,\"pingTimeout\":60000}"))
 	conn.WriteMessage(1, []byte("40"))
 	s.handler.onConnect(*client)
 
 	return client
 }
 
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request, context ...map[string]interface{}) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("can't connect socker server.")
@@ -87,7 +86,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		s.connChan <- conn
+		c := make(map[string]interface{})
+		if len(context) > 0 {
+			c = context[0]
+		}
+		s.NewClient(conn, c)
 	}()
 }
 
@@ -140,12 +143,10 @@ func (s *Server) onConnect(f func(Client) error) {
 func (s *Server) run() {
 	for {
 		select {
-		case c := <-s.connChan:
-			s.NewClient(c)
 		case client := <-s.disconnect:
-			if _, ok := s.clients[client.uid]; ok {
+			if _, ok := s.clients[client.sid]; ok {
 				client.handler.onDisconnect("disconnect")
-				delete(s.clients, client.uid)
+				delete(s.clients, client.sid)
 			}
 		}
 	}

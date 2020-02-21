@@ -31,11 +31,12 @@ type clientHandler struct {
 // Client Structure
 type Client struct {
 	server  *Server
-	uid     string
+	sid     string
 	conn    *websocket.Conn
 	pubsub  *redis.PubSub
 	events  map[string]reflect.Value
 	handler *clientHandler
+	Context map[string]interface{}
 }
 
 // Emit Message
@@ -48,7 +49,7 @@ func (c *Client) Emit(event string, message string, room ...string) {
 	}
 	str = append([]byte{52, 50}, str...)
 
-	r := c.uid
+	r := c.sid
 	if len(room) > 0 {
 		r = room[0]
 	}
