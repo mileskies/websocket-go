@@ -45,7 +45,7 @@ func (c *Client) Emit(event string, message string, room ...string) {
 	str, err := json.Marshal(msg)
 	if err != nil {
 		c.handler.onError(err)
-		log.Error().Err(err)
+		log.Error().Err(err).Msg("")
 	}
 	str = append([]byte{52, 50}, str...)
 
@@ -55,7 +55,7 @@ func (c *Client) Emit(event string, message string, room ...string) {
 	}
 	if err := c.server.redisClient.Publish(r, str).Err(); err != nil {
 		c.handler.onError(err)
-		log.Error().Err(err)
+		log.Error().Err(err).Msg("")
 	}
 }
 
@@ -118,11 +118,11 @@ func (c *Client) readPump() {
 		_, m, err := c.conn.ReadMessage()
 		if err != nil {
 			c.handler.onError(err)
-			log.Error().Err(err)
+			log.Error().Err(err).Msg("")
 			break
 		}
 
-		re := regexp.MustCompile(`\d+\[\"(.*)\"\,(.*)\]`)
+		re := regexp.MustCompile(`\d+(.*)`)
 		if num, err := strconv.Atoi(string(m)); err == nil {
 			// handle status dispatch
 			if num == 2 {
@@ -130,21 +130,19 @@ func (c *Client) readPump() {
 				c.conn.WriteMessage(1, []byte("3"))
 			}
 		} else if matchs := re.FindSubmatch(m); len(matchs) > 0 {
-			event := string(matchs[1])
-			payload := matchs[2]
-			if payload[0] == 34 && payload[len(payload)-1] == 34 {
-				var tmp []byte
-				for i, b := range payload {
-					if i == 0 || i == len(payload)-1 {
-						continue
-					}
-					tmp = append(tmp, b)
-				}
-				payload = tmp
+			req := matchs[1]
+			var arr []string
+			err = json.Unmarshal(req, &arr)
+
+			if err != nil {
+				log.Error().Err(err).Msg("")
+				continue
 			}
+			event := arr[0]
+			payload := arr[1]
 
 			if handler, ok := c.events[event]; ok {
-				go c.eventHandle(handler, reflect.ValueOf(string(payload)))
+				go c.eventHandle(handler, reflect.ValueOf(payload))
 			}
 		}
 
@@ -173,7 +171,7 @@ func (c *Client) writePump() {
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				c.handler.onError(err)
-				log.Error().Err(err)
+				log.Error().Err(err).Msg("")
 				return
 			}
 		}
