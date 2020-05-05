@@ -56,6 +56,10 @@ func main() {
 		c.On("msg", func(msg string) {
 			fmt.Println("msg:", msg)
 			c.Emit("msg", msg)
+			// broadcast msg to each client
+			wsServer.Broadcast("msg", msg)
+			// broadcast msg to each server
+			wsServer.BroadcastToServer(msg)
 		})
 		c.On("onError", func(e error) {
 			fmt.Println("error:", e)
@@ -65,6 +69,11 @@ func main() {
 		})
 
 		return nil
+	})
+
+	// listen msg by server broadcast
+	wsServer.On("BroadcastToServer", func(msg string) {
+		fmt.Println(msg)
 	})
 
 	router.Use(GinMiddleware("*"))

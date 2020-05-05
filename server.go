@@ -30,6 +30,7 @@ type Server struct {
 	clients     map[string]*Client
 	disconnect  chan *Client
 	redisClient *redis.Client
+	pubsub      *redis.PubSub
 	events      map[string]reflect.Value
 	handler     *serverHandler
 	sync.Mutex
@@ -37,10 +38,12 @@ type Server struct {
 
 // NewServer call to Init WebSocket Server
 func NewServer(redisClient *redis.Client) *Server {
+	pubsub := redisClient.Subscribe("BroadcastToServer")
 	server := Server{
 		clients:     make(map[string]*Client),
 		disconnect:  make(chan *Client),
 		redisClient: redisClient,
+		pubsub:      pubsub,
 		events:      make(map[string]reflect.Value),
 		handler:     &serverHandler{},
 	}
@@ -96,13 +99,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request, context ...ma
 
 // Broadcast Message to Each Client From Server
 func (s *Server) Broadcast(event string, message string, room ...string) {
-	msg := make(map[string]string)
-	msg["event"] = event
-	msg["payload"] = message
+	msg := []string{event, message}
 	str, err := json.Marshal(msg)
 	if err != nil {
-		log.Error().Err(err)
+		log.Error().Err(err).Msg("")
 	}
+	str = append([]byte{52, 50}, str...)
 
 	r := "ServerBroadcast"
 	if len(room) > 0 {
@@ -110,28 +112,39 @@ func (s *Server) Broadcast(event string, message string, room ...string) {
 	}
 
 	if err := s.redisClient.Publish(r, str).Err(); err != nil {
-		log.Error().Err(err)
+		log.Error().Err(err).Msg("")
+	}
+}
+
+// BroadcastToServer for sending msg to each server
+func (s *Server) BroadcastToServer(msg string) {
+	if err := s.redisClient.Publish("BroadcastToServer", msg).Err(); err != nil {
+		log.Error().Err(err).Msg("")
 	}
 }
 
 // On Event Listener
 func (s *Server) On(event string, handler interface{}) {
 	fValue := reflect.ValueOf(handler)
+	fType := fValue.Type()
 	if fValue.Kind() != reflect.Func {
 		panic("event handler must be a func.")
-	}
-	fType := fValue.Type()
-	if fType.NumIn() < 1 || fType.In(0).Name() != "Client" {
-		panic("handler function should be like func(c Client)")
 	}
 
 	defaultEvent := [3]string{"onConnect"}
 	for _, e := range defaultEvent {
 		if e == event {
+			if fType.NumIn() < 1 || fType.In(0).Name() != "Client" {
+				panic("handler function should be like func(c Client)")
+			}
 			s.events[event].Call([]reflect.Value{fValue})
 			return
 		}
 	}
+	if fType.NumIn() < 1 || fType.In(0).Name() != "string" {
+		panic("handler function should be like func(str string)")
+	}
+	s.events[event] = fValue
 }
 
 // OnConnect as connection open handler
@@ -139,10 +152,26 @@ func (s *Server) onConnect(f func(Client) error) {
 	s.handler.onConnect = f
 }
 
+func (s *Server) eventHandle(handler reflect.Value, args ...reflect.Value) {
+	handler.Call(args)
+}
+
 // Run WebSocket Server
 func (s *Server) run() {
+	defer func() {
+		s.pubsub.Close()
+	}()
+Loop:
 	for {
 		select {
+		case msg, ok := <-s.pubsub.Channel():
+			if !ok {
+				log.Error().Msg("Receive msg from BroadcastToServer error.")
+				break Loop
+			}
+			if handler, ok := s.events["BroadcastToServer"]; ok {
+				go s.eventHandle(handler, reflect.ValueOf(msg.Payload))
+			}
 		case client := <-s.disconnect:
 			if _, ok := s.clients[client.sid]; ok {
 				client.handler.onDisconnect("disconnect")
