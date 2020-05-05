@@ -99,10 +99,24 @@ Also redis sentinel
     server.Broadcast("chat", "Hi!", "coffee meets")
 ```
 
+- Broadcast message to each server
+```go
+    // BroadcastToServer(message)
+    server.BroadcastToServer("Hello!")
+```
+
 - Event Listen
 ```go
     // On(event, func)
     server.On("onConnect", func(c ws.Client) error {
+        // do something
+    })
+```
+
+- Receive message from other server
+```go
+    // On(event, func)
+    server.On("BroadcastToServer", func(msg string) {
         // do something
     })
 ```
