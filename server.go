@@ -180,3 +180,8 @@ Loop:
 		}
 	}
 }
+
+// SetReadLimit sets the maximum size in bytes for a message read from the peer.
+func (s *Server) SetReadLimit(limit int) {
+	maxMessageSize = limit
+}
