@@ -7,7 +7,7 @@
 
 WebSocket-Go is an implementation for Golang, which is a `realtime`, `fast` and `scalable` websocket(Socket.IO-like) library based on [Gorilla WebSocket](https://github.com/gorilla/websocket), [go-redis](https://github.com/go-redis/redis) and [uuid](https://github.com/google/uuid).
 
-Compatible with [Socket.IO](https://socket.io/) js client
+Compatible with [Socket.IO](https://socket.io/) JS client version `2.x` & `3.x`
 
 ## Installation
 Install:

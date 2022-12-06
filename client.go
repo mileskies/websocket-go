@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v7"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 )
@@ -32,10 +33,10 @@ type clientHandler struct {
 type Client struct {
 	server  *Server
 	sid     string
-	conn    *websocket.Conn
 	pubsub  *redis.PubSub
 	events  map[string]reflect.Value
 	handler *clientHandler
+	Conn    *websocket.Conn
 	Context map[string]interface{}
 }
 
@@ -107,15 +108,15 @@ func (c *Client) eventHandle(handler reflect.Value, args ...reflect.Value) {
 
 func (c *Client) readPump() {
 	defer func() {
-		c.conn.Close()
+		c.Conn.Close()
 		c.pubsub.Close()
 		c.server.disconnect <- c
 	}()
-	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
-	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+	c.Conn.SetReadLimit(maxMessageSize)
+	c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.Conn.SetPongHandler(func(string) error { c.Conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 	for {
-		_, m, err := c.conn.ReadMessage()
+		_, m, err := c.Conn.ReadMessage()
 		if err != nil {
 			c.handler.onError(err)
 			log.Error().Err(err).Msg("")
@@ -126,8 +127,11 @@ func (c *Client) readPump() {
 		if num, err := strconv.Atoi(string(m)); err == nil {
 			// handle status dispatch
 			if num == 2 {
-				c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-				c.conn.WriteMessage(1, []byte("3"))
+				c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+				c.Conn.WriteMessage(1, []byte("3"))
+			} else if num == 40 {
+				sid := uuid.New().String()
+				c.Conn.WriteMessage(1, []byte("40{\"sid\":\""+sid+"\"}"))
 			}
 		} else if matchs := re.FindSubmatch(m); len(matchs) > 0 {
 			req := matchs[1]
@@ -153,7 +157,7 @@ func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
+		c.Conn.Close()
 		c.pubsub.Close()
 		c.server.disconnect <- c
 	}()
@@ -161,18 +165,21 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case msg, ok := <-c.pubsub.Channel():
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			c.conn.WriteMessage(1, []byte(msg.Payload))
+			c.Conn.WriteMessage(1, []byte(msg.Payload))
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				c.handler.onError(err)
 				log.Error().Err(err).Msg("")
 				return
+			}
+			if c.Context["eio"].(string) != "3" {
+				c.Conn.WriteMessage(1, []byte("2"))
 			}
 		}
 	}

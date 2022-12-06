@@ -75,7 +75,9 @@ func (s *Server) NewClient(conn *websocket.Conn, context map[string]interface{})
 	go client.readPump()
 
 	conn.WriteMessage(1, []byte("0{\"sid\":\""+sid+"\",\"upgrades\":[],\"pingInterval\":30000,\"pingTimeout\":60000}"))
-	conn.WriteMessage(1, []byte("40"))
+	if context["eio"].(string) == "3" {
+		conn.WriteMessage(1, []byte("40"))
+	}
 	s.handler.onConnect(*client)
 
 	return client
@@ -88,11 +90,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request, context ...ma
 		return
 	}
 
+	eio := r.URL.Query().Get("EIO")
+
 	go func() {
 		c := make(map[string]interface{})
 		if len(context) > 0 {
 			c = context[0]
 		}
+		c["eio"] = eio
 		s.NewClient(conn, c)
 	}()
 }
