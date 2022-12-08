@@ -60,7 +60,7 @@ func (s *Server) NewClient(conn *websocket.Conn, context map[string]interface{})
 	client := &Client{
 		server:  s,
 		sid:     sid,
-		conn:    conn,
+		Conn:    conn,
 		pubsub:  pubsub,
 		events:  make(map[string]reflect.Value),
 		handler: &clientHandler{},
